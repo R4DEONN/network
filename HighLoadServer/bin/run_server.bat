@@ -1,0 +1,1 @@
+call HighLoadServer.exe 5050 "Server"
