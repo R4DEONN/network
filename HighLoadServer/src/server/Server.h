@@ -1,19 +1,17 @@
 #pragma once
 
-#include <utility>
-
 #include "string"
+#include "../socket/TcpServer.h"
 
 class Server
 {
 public:
-	Server(int port, std::string name)
-		: m_port(port),
-		  m_name(std::move(name))
-	{
-	}
+	Server(u_short port, std::string name);
+
+	void run() const;
 
 private:
-	int m_port;
+	TcpServer m_tcp;
 	std::string m_name;
+	u_short m_port;
 };

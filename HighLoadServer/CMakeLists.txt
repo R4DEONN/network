@@ -11,4 +11,14 @@ add_executable(${PROJECT_NAME}
         src/server/Server.h
         src/client/Client.cpp
         src/client/Client.h
+        src/socket/Socket.cpp
+        src/socket/Socket.h
+        src/socket/WinsockInitializer.cpp
+        src/socket/WinsockInitializer.h
+        src/socket/TcpClient.cpp
+        src/socket/TcpClient.h
+        src/socket/TcpServer.cpp
+        src/socket/TcpServer.h
 )
+
+target_link_libraries(${PROJECT_NAME} ws2_32)

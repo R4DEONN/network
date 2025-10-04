@@ -3,6 +3,7 @@
 #include <optional>
 #include "server/Server.h"
 #include "client/Client.h"
+#include "socket/WinsockInitializer.h"
 
 struct Args
 {
@@ -18,7 +19,6 @@ std::optional<Args> ParseArgs(int argc, char** argv)
 
 	if (argc == 3)
 	{
-		printf("Mew");
 		args.isServer = true;
 		args.port = std::stoi(argv[1]);
 		args.name = argv[2];
@@ -43,16 +43,18 @@ void RunImpl(const Args& args)
 	if (args.isServer)
 	{
 		Server server(args.port, args.name);
+		server.run();
 	}
 	else
 	{
 		Client client(args.address, args.port, args.name);
-		client.Run();
+		client.run();
 	}
 }
 
 int main(int argc, char** argv)
 {
+	WinsockInitializer winsockInitializer;
 	auto args = ParseArgs(argc, argv);
 	if (!args)
 	{

@@ -3,21 +3,18 @@
 #include <utility>
 
 #include "string"
+#include "../socket/TcpClient.h"
 
 class Client
 {
 public:
-	Client(std::string address, int port, std::string name)
-		: m_address(std::move(address)),
-		  m_port(port),
-		  m_name(std::move(name))
-	{
-	}
+	Client(std::string address, u_short port, std::string name);
 
-	void Run();
+	void run() const;
 
 private:
 	std::string m_address;
-	int m_port;
+	u_short m_port;
 	std::string m_name;
+	TcpClient m_tcp;
 };
