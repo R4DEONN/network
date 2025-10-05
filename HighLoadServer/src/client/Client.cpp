@@ -1,23 +1,37 @@
 #include <iostream>
 #include "Client.h"
 
+#include "../common/constructQuery.h"
+#include "../common/parseQuery.h"
+#include "../common/printInfo.h"
+
 Client::Client(std::string address, u_short port, std::string name)
 	: m_address(std::move(address)),
 	  m_port(port),
-	  m_name(std::move(name))
+	  m_name("Client of " + std::move(name))
 {
 }
 
 void Client::run() const
 {
-	if (m_tcp.connect("127.0.0.1", m_port))
+	int number;
+	std::cout << "Enter number: ";
+	std::cin >> number;
+	std::cout << std::endl;
+
+	if (!m_tcp.connect("127.0.0.1", m_port))
 	{
-		auto message = "Hello, my name is " + m_name + "!";
-		m_tcp.sendString(message);
-		auto response = m_tcp.receiveString();
-		std::cout << "Response: " << response << std::endl;
+		throw std::runtime_error("Failed to connect to 127.0.0.1:" + std::to_string(m_port));
 	}
-	// int number;
-	// std::cin >> number;
-	// std::cout << number << std::endl;
+
+	auto message = constructQuery({m_name, number});
+	m_tcp.sendString(message);
+	auto response = m_tcp.receiveString();
+	auto [serverName, serverNumber] = parseQuery(response);
+	printInfo(
+		m_name,
+		serverName,
+		number,
+		serverNumber
+	);
 }

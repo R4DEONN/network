@@ -1,1 +1,1 @@
-call HighLoadServer.exe 5050 "Server"
+call HighLoadServer.exe 5050 "Kirill"

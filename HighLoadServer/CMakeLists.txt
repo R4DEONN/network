@@ -19,6 +19,10 @@ add_executable(${PROJECT_NAME}
         src/socket/TcpClient.h
         src/socket/TcpServer.cpp
         src/socket/TcpServer.h
+        src/common/parseQuery.h
+        src/common/Query.h
+        src/common/printInfo.h
+        src/common/constructQuery.h
 )
 
 target_link_libraries(${PROJECT_NAME} ws2_32)

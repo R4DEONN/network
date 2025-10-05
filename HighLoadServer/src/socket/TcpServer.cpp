@@ -47,7 +47,7 @@ std::string TcpServer::getLocalAddress() const
 	{
 		char ipStr[INET_ADDRSTRLEN];
 		inet_ntop(AF_INET, &addr.sin_addr.s_addr, ipStr, sizeof(ipStr));
-		return std::string(ipStr);
+		return std::string(ipStr) + ":" + std::to_string(ntohs(addr.sin_port));
 	}
 
 	return "unknown";

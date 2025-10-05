@@ -2,10 +2,15 @@
 
 #include <iostream>
 
+#include "../common/constructQuery.h"
+#include "../common/parseQuery.h"
+#include "../common/printInfo.h"
 #include "../socket/TcpServer.h"
 
+constexpr int SERVER_NUMBER = 50;
+
 Server::Server(u_short port, std::string name)
-	: m_name(std::move(name)),
+	: m_name("Server of " + std::move(name)),
 	  m_port(port)
 {
 }
@@ -17,10 +22,27 @@ void Server::run() const
 		throw std::runtime_error("Server: failed to bind");
 	}
 
-	if (auto client = m_tcp.accept())
+	std::cout << "Starting server on " << m_tcp.getLocalAddress() << std::endl << std::endl;
+
+	while (true)
 	{
-		const std::string message = client->receiveString();
-		std::cout << "Received: " << message << std::endl;
-		client->sendString("Echo: " + message);
+		auto client = m_tcp.accept();
+		const std::string request = client->receiveString();
+		const auto [clientName, clientNumber] = parseQuery(request);
+
+		if (clientNumber < 0 || clientNumber > 100)
+		{
+			break;
+		}
+
+		printInfo(
+			clientName,
+			m_name,
+			clientNumber,
+			SERVER_NUMBER
+		);
+
+		const std::string message = constructQuery({m_name, SERVER_NUMBER});
+		client->sendString(message);
 	}
 }
