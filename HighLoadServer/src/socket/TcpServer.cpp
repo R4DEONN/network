@@ -1,10 +1,13 @@
 #include "TcpServer.h"
+
+#include <iostream>
 #include <winsock.h>
 #include <ws2tcpip.h>
 
 TcpServer::TcpServer()
 	: Socket(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP))
 {
+	std::cout << "Server socket created" << std::endl;
 	if (!isValid())
 	{
 		throw std::runtime_error("Invalid socket");
@@ -19,6 +22,7 @@ bool TcpServer::bind(u_short port) const
 	addr.sin_addr.s_addr = INADDR_ANY;
 
 	const int result = ::bind(m_sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+	std::cout << "Server socket bind to " << port << std::endl;
 
 	return result != SOCKET_ERROR;
 }

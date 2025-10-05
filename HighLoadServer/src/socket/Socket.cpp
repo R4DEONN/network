@@ -1,5 +1,6 @@
 #include "Socket.h"
 
+#include <iostream>
 #include <stdexcept>
 
 Socket::Socket(SOCKET sock)
@@ -44,6 +45,7 @@ void Socket::close()
 	if (m_sock != INVALID_SOCKET)
 	{
 		closesocket(m_sock);
+		std::cout << "Connection closed" << std::endl;
 		m_sock = INVALID_SOCKET;
 	}
 }
