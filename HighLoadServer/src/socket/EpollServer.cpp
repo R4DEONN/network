@@ -81,7 +81,6 @@ void EpollServer::run()
 
 			if (fd == m_server.getHandle())
 			{
-				// Новое подключение
 				auto client = m_server.accept();
 				if (client && client->isValid())
 				{
