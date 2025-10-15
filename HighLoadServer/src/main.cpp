@@ -1,9 +1,9 @@
 #include <exception>
 #include <iostream>
 #include <optional>
+#include <csignal>
 #include "server/Server.h"
 #include "client/Client.h"
-#include "socket/WinsockInitializer.h"
 
 struct Args
 {
@@ -38,12 +38,42 @@ std::optional<Args> ParseArgs(int argc, char** argv)
 	return args;
 }
 
+void waitForKillSignal()
+{
+	sigset_t set;
+	int sig;
+
+	sigemptyset(&set);
+	sigaddset(&set, SIGINT);
+	sigaddset(&set, SIGTERM);
+
+	pthread_sigmask(SIG_BLOCK, &set, nullptr);
+
+	sigwait(&set, &sig);
+
+	std::cout << "\nReceived signal " << sig << ". Shutting down..." << std::endl;
+}
+
 void RunImpl(const Args& args)
 {
 	if (args.isServer)
 	{
 		Server server(args.port, args.name);
-		server.run();
+
+		std::jthread serverThread([&server]() {
+			try
+			{
+				server.run();
+			}
+			catch (const std::exception& e)
+			{
+				std::cerr << "Server error: " << e.what() << std::endl;
+			}
+		});
+
+		waitForKillSignal();
+
+		server.shutdown();
 	}
 	else
 	{
@@ -54,7 +84,6 @@ void RunImpl(const Args& args)
 
 int main(int argc, char** argv)
 {
-	WinsockInitializer winsockInitializer;
 	auto args = ParseArgs(argc, argv);
 	if (!args)
 	{

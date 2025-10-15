@@ -13,8 +13,6 @@ add_executable(${PROJECT_NAME}
         src/client/Client.h
         src/socket/Socket.cpp
         src/socket/Socket.h
-        src/socket/WinsockInitializer.cpp
-        src/socket/WinsockInitializer.h
         src/socket/TcpClient.cpp
         src/socket/TcpClient.h
         src/socket/TcpServer.cpp
@@ -23,6 +21,8 @@ add_executable(${PROJECT_NAME}
         src/common/Query.h
         src/common/printInfo.h
         src/common/constructQuery.h
+        src/socket/EpollServer.cpp
+        src/socket/EpollServer.h
+        src/common/ThreadPool.cpp
+        src/common/ThreadPool.h
 )
-
-target_link_libraries(${PROJECT_NAME} ws2_32)

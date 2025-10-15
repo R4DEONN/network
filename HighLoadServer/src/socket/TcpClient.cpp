@@ -3,6 +3,10 @@
 #include <iostream>
 #include <stdexcept>
 #include <vector>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <cstring>
 
 TcpClient::TcpClient()
 	: Socket(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP))
@@ -14,7 +18,7 @@ TcpClient::TcpClient()
 	}
 }
 
-TcpClient::TcpClient(SOCKET sock)
+TcpClient::TcpClient(int sock)
 	: Socket(sock)
 {
 	if (!isValid())
@@ -33,7 +37,7 @@ bool TcpClient::connect(const std::string& ip, u_short port) const
 	const int result = ::connect(m_sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
 	std::cout << "Client socket connected to " << ip << ":" << port << std::endl;
 
-	return result != SOCKET_ERROR;
+	return result != -1;
 }
 
 int TcpClient::sendString(const std::string& str) const
@@ -44,10 +48,35 @@ int TcpClient::sendString(const std::string& str) const
 
 std::string TcpClient::receiveString(size_t maxLen) const
 {
-	std::vector<char> buffer(maxLen + 1);
-	const int bytes = recv(buffer.data(), static_cast<int>(maxLen));
-	const auto str = std::string(buffer.data(), bytes);
-	std::cout << "Receive: " << str << std::endl;
-	return str;
+	try
+	{
+		if (maxLen == 0)
+		{
+			return {};
+		}
+
+		std::vector<char> buffer(maxLen);
+		const int bytes = recv(buffer.data(), static_cast<int>(maxLen));
+
+		if (bytes < 0)
+		{
+			throw std::runtime_error("recv failed: " + std::string(strerror(errno)));
+		}
+		if (bytes == 0)
+		{
+			std::cout << "Connection closed by peer" << std::endl;
+			return {};
+		}
+
+		std::string str(buffer.data(), static_cast<size_t>(bytes));
+		std::cout << "Receive: " << str << std::endl;
+		return str;
+	}
+	catch (const std::exception& e)
+	{
+		std::cout << e.what() << std::endl;
+	}
+
+	return "";
 }
 

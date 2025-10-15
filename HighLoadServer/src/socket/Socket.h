@@ -2,12 +2,10 @@
 
 #include <string>
 
-#include "winsock2.h"
-
 class Socket
 {
 public:
-	explicit Socket(SOCKET sock = INVALID_SOCKET);
+	explicit Socket(int sock = -1);
 	virtual ~Socket();
 
 	Socket(Socket&& other) noexcept;
@@ -17,7 +15,7 @@ public:
 	Socket& operator=(const Socket&) = delete;
 
 	[[nodiscard]] bool isValid() const;
-	[[nodiscard]] SOCKET getHandle() const;
+	[[nodiscard]] int getHandle() const;
 
 	void close();
 
@@ -25,5 +23,5 @@ public:
 	int recv(char* buffer, int len) const;
 
 protected:
-	SOCKET m_sock = INVALID_SOCKET;
+	int m_sock = -1;
 };

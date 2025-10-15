@@ -1,9 +1,9 @@
 #pragma once
 #include <memory>
-#include <_bsd_types.h>
 
 #include "Socket.h"
 #include "TcpClient.h"
+#include <sys/socket.h>
 
 class TcpServer : public Socket
 {

@@ -1,17 +1,17 @@
 #pragma once
 
-#include "string"
-#include "../socket/TcpServer.h"
+#include <string>
+#include "../socket/EpollServer.h"
 
 class Server
 {
 public:
-	Server(u_short port, std::string name);
-
-	void run() const;
+	Server(unsigned short port, std::string name);
+	void run();
+	void shutdown();
 
 private:
-	TcpServer m_tcp;
+	EpollServer m_epollServer;
 	std::string m_name;
-	u_short m_port;
+	static constexpr int SERVER_NUMBER = 50;
 };

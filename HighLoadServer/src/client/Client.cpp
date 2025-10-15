@@ -1,5 +1,6 @@
 #include <iostream>
 #include "Client.h"
+#include "thread"
 
 #include "../common/constructQuery.h"
 #include "../common/parseQuery.h"
@@ -14,6 +15,7 @@ Client::Client(std::string address, u_short port, std::string name)
 
 void Client::run() const
 {
+	using namespace std::chrono_literals;
 	int number;
 	std::cout << "Enter number: ";
 	std::cin >> number;
@@ -23,6 +25,8 @@ void Client::run() const
 	{
 		throw std::runtime_error("Failed to connect to 127.0.0.1:" + std::to_string(m_port));
 	}
+
+	std::this_thread::sleep_for(7s);
 
 	auto message = constructQuery({m_name, number});
 	m_tcp.sendString(message);

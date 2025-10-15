@@ -5,7 +5,7 @@ class TcpClient : public Socket
 {
 public:
 	TcpClient();
-	explicit TcpClient(SOCKET sock);
+	explicit TcpClient(int sock);
 	bool connect(const std::string& ip, u_short port) const;
 
 	int sendString(const std::string& str) const;
