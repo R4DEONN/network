@@ -1,6 +1,7 @@
 #pragma once
 #include <iostream>
 #include <string>
+#include <syncstream>
 
 inline void printInfo(
 	const std::string& clientName,
@@ -9,7 +10,7 @@ inline void printInfo(
 	int serverNumber
 )
 {
-	std::cout
+	std::osyncstream(std::cout)
 		<< "Client: " << clientName << std::endl
 		<< "Server: " << serverName << std::endl
 		<< "Client number: " << clientNumber << std::endl

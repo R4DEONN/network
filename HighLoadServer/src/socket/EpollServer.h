@@ -24,10 +24,12 @@ public:
 
 private:
 	void removeClient(int client_fd);
+	void handleNewConnection();
+	void handleClientData(int clientFd);
 
 	TcpServer m_server;
-	int m_epoll_fd = -1;
-	int m_max_events;
+	int m_epollFd = -1;
+	int m_maxEvents;
 	MessageHandler m_onMessage;
 
 	struct ClientInfo {

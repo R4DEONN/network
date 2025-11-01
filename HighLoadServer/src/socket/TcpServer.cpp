@@ -5,11 +5,12 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <cstring>
+#include <syncstream>
 
 TcpServer::TcpServer()
 	: Socket(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP))
 {
-	std::cout << "Server socket created" << std::endl;
+	std::osyncstream(std::cout) << "Server socket created" << std::endl;
 	if (!isValid())
 	{
 		throw std::runtime_error("Invalid socket: " + std::string(strerror(errno)));
@@ -32,12 +33,12 @@ bool TcpServer::bind(unsigned short port) const
 	const int result = ::bind(m_sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
 	if (result == 0)
 	{
-		std::cout << "Server socket bound to port " << port << std::endl;
+		std::osyncstream(std::cout) << "Server socket bound to port " << port << std::endl;
 		return true;
 	}
 	else
 	{
-		std::cerr << "Bind failed: " << strerror(errno) << std::endl;
+		std::osyncstream(std::cerr) << "Bind failed: " << strerror(errno) << std::endl;
 		return false;
 	}
 }
@@ -47,7 +48,7 @@ bool TcpServer::listen(int backlog) const
 	const int result = ::listen(m_sock, backlog);
 	if (result == -1)
 	{
-		std::cerr << "Listen failed: " << strerror(errno) << std::endl;
+		std::osyncstream(std::cerr) << "Listen failed: " << strerror(errno) << std::endl;
 		return false;
 	}
 	return true;
@@ -60,7 +61,7 @@ std::unique_ptr<TcpClient> TcpServer::accept() const
 	{
 		if (errno != EAGAIN && errno != EWOULDBLOCK)
 		{
-			std::cerr << "Accept failed: " << strerror(errno) << std::endl;
+			std::osyncstream(std::cerr) << "Accept failed: " << strerror(errno) << std::endl;
 		}
 		return nullptr;
 	}

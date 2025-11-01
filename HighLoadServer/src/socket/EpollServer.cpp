@@ -1,34 +1,36 @@
-#include "EpollServer.h"
 #include <iostream>
 #include <unistd.h>
 #include <fcntl.h>
 #include <cstring>
 #include <cerrno>
+#include <chrono>
+#include <vector>
+#include <string>
+#include "EpollServer.h"
 
-constexpr size_t BUFFER_SIZE = 4096;
-constexpr std::chrono::seconds TIMEOUT{5};
+constexpr std::chrono::seconds clientTimeout{ 10 };
 
-EpollServer::EpollServer(unsigned short port, int max_events)
-	: m_max_events(max_events)
+EpollServer::EpollServer(unsigned short port, int maxEvents)
+	: m_maxEvents(maxEvents), m_stopRequested(false)
 {
-	m_epoll_fd = epoll_create1(EPOLL_CLOEXEC);
-	if (m_epoll_fd == -1)
+	m_epollFd = epoll_create1(EPOLL_CLOEXEC);
+	if (m_epollFd == -1)
 	{
 		throw std::runtime_error("epoll_create1 failed: " + std::string(strerror(errno)));
 	}
 
 	if (!m_server.bind(port) || !m_server.listen())
 	{
-		throw std::runtime_error("Failed to bind/listen server socket");
+		throw std::runtime_error("Failed to bind or listen on server socket");
 	}
 
 	int flags = fcntl(m_server.getHandle(), F_GETFL, 0);
 	fcntl(m_server.getHandle(), F_SETFL, flags | O_NONBLOCK);
 
-	epoll_event ev{};
-	ev.events = EPOLLIN;
-	ev.data.fd = m_server.getHandle();
-	if (epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, m_server.getHandle(), &ev) == -1)
+	epoll_event event{};
+	event.events = EPOLLIN;
+	event.data.fd = m_server.getHandle();
+	if (epoll_ctl(m_epollFd, EPOLL_CTL_ADD, m_server.getHandle(), &event) == -1)
 	{
 		throw std::runtime_error("epoll_ctl(server) failed: " + std::string(strerror(errno)));
 	}
@@ -38,9 +40,9 @@ EpollServer::EpollServer(unsigned short port, int max_events)
 
 EpollServer::~EpollServer()
 {
-	if (m_epoll_fd != -1)
+	if (m_epollFd != -1)
 	{
-		close(m_epoll_fd);
+		close(m_epollFd);
 	}
 }
 
@@ -51,16 +53,17 @@ void EpollServer::setMessageHandler(MessageHandler handler)
 
 void EpollServer::run()
 {
-	std::vector<epoll_event> events(m_max_events);
+	std::vector<epoll_event> events(m_maxEvents);
 
 	while (true)
 	{
-		if (m_stopRequested && m_clientsInfo.size() == 0)
+		if (m_stopRequested && m_clientsInfo.empty())
 		{
 			break;
 		}
-		int nfds = epoll_wait(m_epoll_fd, events.data(), m_max_events, 1000);
-		if (nfds == -1)
+
+		int numEvents = epoll_wait(m_epollFd, events.data(), m_maxEvents, 1000);
+		if (numEvents == -1)
 		{
 			if (errno == EINTR)
 			{
@@ -75,32 +78,13 @@ void EpollServer::run()
 
 		checkTimeouts();
 
-		for (int i = 0; i < nfds; ++i)
+		for (int i = 0; i < numEvents; ++i)
 		{
 			int fd = events[i].data.fd;
 
 			if (fd == m_server.getHandle())
 			{
-				auto client = m_server.accept();
-				if (client && client->isValid())
-				{
-					int client_fd = client->getHandle();
-					int flags = fcntl(client_fd, F_GETFL, 0);
-					fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
-
-					epoll_event ev{};
-					ev.events = EPOLLIN | EPOLLRDHUP;
-					ev.data.fd = client_fd;
-					if (epoll_ctl(m_epoll_fd, EPOLL_CTL_ADD, client_fd, &ev) == -1)
-					{
-						std::cerr << "Failed to add client to epoll" << std::endl;
-					}
-					else
-					{
-						m_clientsInfo[client_fd] = {std::chrono::steady_clock::now(), std::move(client)};
-						std::cout << "Client connected: " << client_fd << std::endl;
-					}
-				}
+				handleNewConnection();
 			}
 			else if (events[i].events & (EPOLLRDHUP | EPOLLERR))
 			{
@@ -109,50 +93,79 @@ void EpollServer::run()
 			}
 			else if (events[i].events & EPOLLIN)
 			{
-				auto it = m_clientsInfo.find(fd);
-				if (it == m_clientsInfo.end()) continue;
-
-				char buffer[BUFFER_SIZE];
-				int bytes = it->second.tcp->recv(buffer, BUFFER_SIZE - 1);
-
-				if (bytes <= 0)
-				{
-					std::cout << "Client closed or error: " << fd << std::endl;
-					removeClient(fd);
-				}
-				else
-				{
-					buffer[bytes] = '\0';
-					std::string request(buffer, bytes);
-
-					m_clientsInfo[fd].lastActivity = std::chrono::steady_clock::now();
-
-					if (m_onMessage)
-					{
-						auto clientPtr = it->second.tcp.get();
-
-						m_threadPool.enqueue([this, request, clientPtr]() {
-							try
-							{
-								std::string response = m_onMessage(request);
-								clientPtr->sendString(response);
-							}
-							catch (const std::exception& e)
-							{
-								std::cerr << "Error in worker thread: " << e.what() << std::endl;
-							}
-						});
-					}
-				}
+				handleClientData(fd);
 			}
 		}
 	}
 }
 
-void EpollServer::removeClient(int client_fd)
+void EpollServer::handleNewConnection()
 {
-	m_clientsInfo.erase(client_fd);
-	epoll_ctl(m_epoll_fd, EPOLL_CTL_DEL, client_fd, nullptr);
+	auto client = m_server.accept();
+	if (!client || !client->isValid())
+	{
+		return;
+	}
+
+	int clientFd = client->getHandle();
+
+	int flags = fcntl(clientFd, F_GETFL, 0);
+	fcntl(clientFd, F_SETFL, flags | O_NONBLOCK);
+
+	epoll_event event{};
+	event.events = EPOLLIN | EPOLLRDHUP;
+	event.data.fd = clientFd;
+	if (epoll_ctl(m_epollFd, EPOLL_CTL_ADD, clientFd, &event) == -1)
+	{
+		std::cerr << "Failed to add client socket to epoll" << std::endl;
+		return;
+	}
+
+	m_clientsInfo[clientFd] = { std::chrono::steady_clock::now(), std::move(client) };
+	std::cout << "Client connected: " << clientFd << std::endl;
+}
+
+void EpollServer::handleClientData(int clientFd)
+{
+	auto it = m_clientsInfo.find(clientFd);
+	if (it == m_clientsInfo.end())
+	{
+		return;
+	}
+
+	std::string request = it->second.tcp->receiveString();
+
+	if (request.size() == 0)
+	{
+		std::cout << "Client closed or recv error: " << clientFd << std::endl;
+		removeClient(clientFd);
+		return;
+	}
+
+	it->second.lastActivity = std::chrono::steady_clock::now();
+
+	if (m_onMessage)
+	{
+		auto clientPtr = it->second.tcp.get();
+		m_threadPool.enqueue([this, request = std::move(request), clientPtr]()
+		{
+			try
+			{
+				std::string response = m_onMessage(request);
+				clientPtr->sendString(response);
+			}
+			catch (const std::exception& ex)
+			{
+				std::cerr << "Error in worker thread: " << ex.what() << std::endl;
+			}
+		});
+	}
+}
+
+void EpollServer::removeClient(int clientFd)
+{
+	epoll_ctl(m_epollFd, EPOLL_CTL_DEL, clientFd, nullptr);
+	m_clientsInfo.erase(clientFd);
 }
 
 std::string EpollServer::getLocalAddress() const
@@ -165,28 +178,30 @@ void EpollServer::shutdown()
 	m_stopRequested = true;
 	m_server.close();
 	std::cout << "Server stopped accepting new connections." << std::endl;
-	if (m_clientsInfo.size() > 0)
+
+	if (!m_clientsInfo.empty())
 	{
-		std::cout << "Active clients: " << m_clientsInfo.size() << ". Waiting for them to finish..." << std::endl;
+		std::cout << "Active clients: " << m_clientsInfo.size()
+				  << ". Waiting for them to finish..." << std::endl;
 	}
 }
 
 void EpollServer::checkTimeouts()
 {
 	auto now = std::chrono::steady_clock::now();
-	std::vector<int> toRemove;
+	std::vector<int> timedOutClients;
 
-	for (const auto& [fd, info] : m_clientsInfo)
+	for (const auto& [fd, info]: m_clientsInfo)
 	{
-		if (now - info.lastActivity > TIMEOUT)
+		if (now - info.lastActivity > clientTimeout)
 		{
 			std::cout << "Client " << fd << " timed out (no activity for "
-					  << TIMEOUT.count() << "s). Closing." << std::endl;
-			toRemove.push_back(fd);
+					  << clientTimeout.count() << "s). Closing." << std::endl;
+			timedOutClients.push_back(fd);
 		}
 	}
 
-	for (int fd : toRemove)
+	for (int fd: timedOutClients)
 	{
 		removeClient(fd);
 	}

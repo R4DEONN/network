@@ -9,6 +9,7 @@ public:
 	Client(std::string address, u_short port, std::string name);
 
 	void run() const;
+	void run(int number, int sleepMs) const;
 
 private:
 	std::string m_address;

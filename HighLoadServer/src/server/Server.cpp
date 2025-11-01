@@ -20,7 +20,7 @@ void Server::run()
 
 			if (clientNumber < 0 || clientNumber > 100)
 			{
-				std::cout << "Invalid client number (" << clientNumber << "), closing connection." << std::endl;
+				std::osyncstream(std::cout) << "Invalid client number (" << clientNumber << "), closing connection." << std::endl;
 				return "";
 			}
 
@@ -30,12 +30,12 @@ void Server::run()
 		}
 		catch (const std::exception& e)
 		{
-			std::cerr << "Error handling client " << ": " << e.what() << std::endl;
+			std::osyncstream(std::cerr) << "Error handling client " << ": " << e.what() << std::endl;
 			return "";
 		}
 	});
 
-	std::cout << "Starting server on " << m_epollServer.getLocalAddress() << std::endl << std::endl;
+	std::osyncstream(std::cout) << "Starting server on " << m_epollServer.getLocalAddress() << std::endl << std::endl;
 
 	m_epollServer.run();
 }
