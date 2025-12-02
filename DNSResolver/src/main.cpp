@@ -52,7 +52,7 @@ void debug_log(const std::string& msg)
 	}
 }
 
-std::vector<uint8_t> qname_encode(const std::string& domain)
+std::vector<uint8_t> encode_domain_name(const std::string& domain)
 {
 	std::vector<uint8_t> out;
 	size_t start = 0;
@@ -71,7 +71,7 @@ std::vector<uint8_t> qname_encode(const std::string& domain)
 	return out;
 }
 
-std::string qname_decode(const uint8_t* data, size_t offset, size_t max_len, size_t& consumed)
+std::string decode_domain_name(const uint8_t* data, size_t offset, size_t max_len, size_t& consumed)
 {
 	std::string out;
 	size_t pos = offset;
@@ -88,7 +88,7 @@ std::string qname_decode(const uint8_t* data, size_t offset, size_t max_len, siz
 			if (pos + 2 > max_len) break;
 			uint16_t ptr = ((len & 0x3F) << 8) | data[pos + 1];
 			size_t sub_consumed = 0;
-			std::string pointed = qname_decode(data, ptr, max_len, sub_consumed);
+			std::string pointed = decode_domain_name(data, ptr, max_len, sub_consumed);
 			if (!out.empty()) out += ".";
 			out += pointed;
 			consumed = pos - offset + 2;
@@ -150,7 +150,7 @@ int create_tcp_socket()
 	return sockfd;
 }
 
-bool send_udp(int sockfd, const struct sockaddr_in& server_addr, const std::vector<uint8_t>& buf)
+bool send_udp_packet(int sockfd, const struct sockaddr_in& server_addr, const std::vector<uint8_t>& buf)
 {
 	ssize_t sent = sendto(sockfd, buf.data(), buf.size(), 0,
 		reinterpret_cast<const struct sockaddr*>(&server_addr),
@@ -158,7 +158,7 @@ bool send_udp(int sockfd, const struct sockaddr_in& server_addr, const std::vect
 	return static_cast<size_t>(sent) == buf.size();
 }
 
-bool recv_udp(int sockfd, std::vector<uint8_t>& buf)
+bool receive_udp_packet(int sockfd, std::vector<uint8_t>& buf)
 {
 	buf.resize(MAX_UDP_SIZE);
 	ssize_t received = recvfrom(sockfd, buf.data(), buf.size(), 0, nullptr, nullptr);
@@ -167,7 +167,7 @@ bool recv_udp(int sockfd, std::vector<uint8_t>& buf)
 	return true;
 }
 
-bool send_tcp(int sockfd, const std::vector<uint8_t>& buf)
+bool send_tcp_packet(int sockfd, const std::vector<uint8_t>& buf)
 {
 	uint16_t len = htons(static_cast<uint16_t>(buf.size()));
 	std::vector<uint8_t> full;
@@ -178,7 +178,7 @@ bool send_tcp(int sockfd, const std::vector<uint8_t>& buf)
 	return static_cast<size_t>(sent) == full.size();
 }
 
-bool recv_tcp(int sockfd, std::vector<uint8_t>& buf)
+bool receive_tcp_packet(int sockfd, std::vector<uint8_t>& buf)
 {
 	uint8_t len_bytes[2];
 	if (recv(sockfd, len_bytes, 2, 0) != 2) return false;
@@ -189,45 +189,40 @@ bool recv_tcp(int sockfd, std::vector<uint8_t>& buf)
 	return static_cast<size_t>(received) == len;
 }
 
-// --- DNS Query Functionality ---
-
-std::vector<uint8_t> build_dns_query(uint16_t id, const std::string& qname, QType qtype)
+std::vector<uint8_t> build_dns_query_packet(uint16_t id, const std::string& qname, QType qtype)
 {
 	std::vector<uint8_t> packet;
-	// Header
 	packet.resize(12, 0);
 	*reinterpret_cast<uint16_t*>(packet.data()) = htons(id);
-	packet[2] = 0x01; // Recursion desired = 0, but we're iterative → RD=0
-	packet[4] = 0x00; // QDCOUNT = 1
+	packet[2] = 0x01;
+	packet[4] = 0x00;
 	packet[5] = 0x01;
 
-	auto qn = qname_encode(qname);
+	auto qn = encode_domain_name(qname);
 	packet.insert(packet.end(), qn.begin(), qn.end());
 
-	// QTYPE
 	uint16_t t = static_cast<uint16_t>(qtype);
 	packet.push_back(static_cast<uint8_t>(t >> 8));
 	packet.push_back(static_cast<uint8_t>(t & 0xFF));
 
-	// QCLASS = IN (1)
 	packet.push_back(0);
 	packet.push_back(1);
 
 	return packet;
 }
 
-bool is_tc_set(const std::vector<uint8_t>& response)
+bool is_truncated_flag_set(const std::vector<uint8_t>& response)
 {
 	if (response.size() < 4) return false;
 	uint16_t flags = ntohs_uint16(response.data() + 2);
 	return (flags & 0x0200) != 0;
 }
 
-std::vector<std::string> parse_response(
+std::vector<std::string> parse_dns_response(
 	const std::vector<uint8_t>& response,
 	QType expected_type,
 	std::vector<std::string>& next_ns
-	)
+)
 {
 	std::vector<std::string> results;
 	if (response.size() < sizeof(DNSHeader)) return results;
@@ -241,14 +236,14 @@ std::vector<std::string> parse_response(
 	for (int i = 0; i < qdcount && pos < response.size(); ++i)
 	{
 		size_t consumed = 0;
-		qname_decode(response.data(), pos, response.size(), consumed);
+		decode_domain_name(response.data(), pos, response.size(), consumed);
 		pos += consumed + 4;
 	}
 
 	auto parse_resource_record = [&](size_t& p) -> bool
 	{
 		size_t consumed = 0;
-		std::string name = qname_decode(response.data(), p, response.size(), consumed);
+		std::string name = decode_domain_name(response.data(), p, response.size(), consumed);
 		if (consumed == 0) return false;
 		p += consumed;
 		if (p + 10 > response.size()) return false;
@@ -270,14 +265,12 @@ std::vector<std::string> parse_response(
 				else
 					inet_ntop(AF_INET6, response.data() + p, ip_str, sizeof(ip_str));
 				results.emplace_back(ip_str);
-
-				std::string cache_key = (expected_type == QType::A ? "A:" : "AAAA:") + name;
 			}
 		}
 		else if (type == 2 && nscount > 0)
 		{
 			size_t ns_consumed = 0;
-			std::string ns_name = qname_decode(response.data(), p, response.size(), ns_consumed);
+			std::string ns_name = decode_domain_name(response.data(), p, response.size(), ns_consumed);
 			next_ns.push_back(ns_name);
 		}
 		else if (type == 1 && nscount == 0 && ancount == 0)
@@ -286,7 +279,7 @@ std::vector<std::string> parse_response(
 			if (rdlength == 4)
 			{
 				inet_ntop(AF_INET, response.data() + p, ip_str, sizeof(ip_str));
-				next_ns.push_back(ip_str); // treat as glue
+				next_ns.push_back(ip_str);
 			}
 		}
 		p += rdlength;
@@ -309,7 +302,7 @@ std::vector<std::string> parse_response(
 	return results;
 }
 
-std::string resolve_name_to_ip(const std::string& name)
+std::string resolve_hostname_to_ip(const std::string& name)
 {
 	struct addrinfo hints, * res;
 	std::memset(&hints, 0, sizeof(hints));
@@ -326,11 +319,8 @@ std::string resolve_name_to_ip(const std::string& name)
 	return "";
 }
 
-std::vector<std::string> iterative_resolve(const std::string& domain, QType qtype)
+std::vector<std::string> iterative_dns_resolve(const std::string& domain, QType qtype)
 {
-	std::string cache_key = (qtype == QType::A ? "A:" : "AAAA:") + domain;
-	auto now = std::chrono::steady_clock::now();
-
 	std::vector<std::string> current_servers = ROOT_SERVERS;
 	std::string current_qname = domain;
 
@@ -346,7 +336,6 @@ std::vector<std::string> iterative_resolve(const std::string& domain, QType qtyp
 		debug_log("Querying " + server + " for " + current_qname);
 
 		std::vector<std::string> next_ns;
-		auto response = build_dns_query(0, current_qname, qtype); // dummy for parse
 		int sockfd = create_udp_socket();
 		if (sockfd < 0) continue;
 
@@ -360,15 +349,15 @@ std::vector<std::string> iterative_resolve(const std::string& domain, QType qtyp
 		}
 
 		uint16_t id = static_cast<uint16_t>(std::time(nullptr) ^ getpid());
-		auto query = build_dns_query(id, current_qname, qtype);
-		if (!send_udp(sockfd, server_addr, query))
+		auto query = build_dns_query_packet(id, current_qname, qtype);
+		if (!send_udp_packet(sockfd, server_addr, query))
 		{
 			close(sockfd);
 			continue;
 		}
 
 		std::vector<uint8_t> raw_response;
-		if (!recv_udp(sockfd, raw_response))
+		if (!receive_udp_packet(sockfd, raw_response))
 		{
 			close(sockfd);
 			continue;
@@ -377,7 +366,7 @@ std::vector<std::string> iterative_resolve(const std::string& domain, QType qtyp
 
 		if (raw_response.size() < 2 || ntohs_uint16(raw_response.data()) != id) continue;
 
-		if (is_tc_set(raw_response))
+		if (is_truncated_flag_set(raw_response))
 		{
 			debug_log("Create tcp connection");
 			int tcp_sock = create_tcp_socket();
@@ -385,11 +374,10 @@ std::vector<std::string> iterative_resolve(const std::string& domain, QType qtyp
 			{
 				if (connect(tcp_sock, reinterpret_cast<struct sockaddr*>(&server_addr), sizeof(server_addr)) == 0)
 				{
-					if (send_tcp(tcp_sock, query))
+					if (send_tcp_packet(tcp_sock, query))
 					{
-						if (recv_tcp(tcp_sock, raw_response))
+						if (receive_tcp_packet(tcp_sock, raw_response))
 						{
-							// ok
 						}
 					}
 				}
@@ -397,20 +385,19 @@ std::vector<std::string> iterative_resolve(const std::string& domain, QType qtyp
 			}
 		}
 
-		std::vector<std::string> answers = parse_response(raw_response, qtype, next_ns);
+		std::vector<std::string> answers = parse_dns_response(raw_response, qtype, next_ns);
 
 		if (!answers.empty())
 		{
 			return answers;
 		}
 
-		// Check RCODE
 		if (raw_response.size() >= 4)
 		{
 			uint16_t flags = ntohs_uint16(raw_response.data() + 2);
 			uint8_t rcode = flags & 0xF;
 			if (rcode == 3)
-			{ // NXDOMAIN
+			{
 				debug_log("Domain does not exist (NXDOMAIN)");
 				return {};
 			}
@@ -421,7 +408,7 @@ std::vector<std::string> iterative_resolve(const std::string& domain, QType qtyp
 			current_servers.clear();
 			for (const auto& ns: next_ns)
 			{
-				std::string ip = resolve_name_to_ip(ns);
+				std::string ip = resolve_hostname_to_ip(ns);
 				if (ip.empty())
 				{
 					continue;
@@ -440,7 +427,8 @@ std::vector<std::string> iterative_resolve(const std::string& domain, QType qtyp
 		}
 	}
 
-	if (iterations >= MAX_ITERATIONS) {
+	if (iterations >= MAX_ITERATIONS)
+	{
 		debug_log("→ Too many iterations, aborting to prevent loop");
 		return {};
 	}
@@ -492,7 +480,7 @@ int main(int argc, char* argv[])
 		debug_mode = true;
 	}
 
-	auto result = iterative_resolve(domain, qtype);
+	auto result = iterative_dns_resolve(domain, qtype);
 
 	if (result.empty())
 	{
