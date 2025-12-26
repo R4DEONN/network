@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <netdb.h>
 #include <ctime>
+#include <unordered_map>
 
 #ifdef __linux__
 
@@ -106,7 +107,9 @@ std::string decode_domain_name(const uint8_t* data, size_t offset, size_t max_le
 
 uint16_t ntohs_uint16(const uint8_t* ptr)
 {
-	return ntohs(*reinterpret_cast<const uint16_t*>(ptr));
+	uint16_t val;
+	std::memcpy(&val, ptr, sizeof(val));
+	return ntohs(val);
 }
 
 struct DNSHeader
@@ -193,8 +196,9 @@ std::vector<uint8_t> build_dns_query_packet(uint16_t id, const std::string& qnam
 {
 	std::vector<uint8_t> packet;
 	packet.resize(12, 0);
-	*reinterpret_cast<uint16_t*>(packet.data()) = htons(id);
-	packet[2] = 0x01;
+	uint16_t net_id = htons(id);
+	std::memcpy(packet.data(), &net_id, sizeof(net_id));
+	packet[2] = 0x00;
 	packet[4] = 0x00;
 	packet[5] = 0x01;
 
@@ -221,105 +225,118 @@ bool is_truncated_flag_set(const std::vector<uint8_t>& response)
 std::vector<std::string> parse_dns_response(
 	const std::vector<uint8_t>& response,
 	QType expected_type,
-	std::vector<std::string>& next_ns
+	std::vector<std::string>& out_next_ns,
+	std::unordered_map<std::string, std::string>& out_glue,
+	std::string& out_cname  // для CNAME поддержки
 )
 {
-	std::vector<std::string> results;
-	if (response.size() < sizeof(DNSHeader)) return results;
+	out_next_ns.clear();
+	out_glue.clear();
+	out_cname.clear();
+	std::vector<std::string> answers;
+
+	if (response.size() < sizeof(DNSHeader)) return answers;
 
 	const DNSHeader* hdr = reinterpret_cast<const DNSHeader*>(response.data());
 	uint16_t qdcount = ntohs(hdr->qdcount);
 	uint16_t ancount = ntohs(hdr->ancount);
 	uint16_t nscount = ntohs(hdr->nscount);
+	uint16_t arcount = ntohs(hdr->arcount);
 
 	size_t pos = sizeof(DNSHeader);
+
+	// QUESTION
 	for (int i = 0; i < qdcount && pos < response.size(); ++i)
 	{
 		size_t consumed = 0;
 		decode_domain_name(response.data(), pos, response.size(), consumed);
-		pos += consumed + 4;
+		pos += consumed + 4; // +4 = TYPE (2) + CLASS (2)
 	}
 
-	auto parse_resource_record = [&](size_t& p) -> bool
+	// ANSWER
+	for (int i = 0; i < ancount && pos < response.size(); ++i)
 	{
 		size_t consumed = 0;
-		std::string name = decode_domain_name(response.data(), p, response.size(), consumed);
-		if (consumed == 0) return false;
-		p += consumed;
-		if (p + 10 > response.size()) return false;
+		std::string name = decode_domain_name(response.data(), pos, response.size(), consumed);
+		pos += consumed;
+		if (pos + 10 > response.size()) break;
 
-		uint16_t type = ntohs_uint16(response.data() + p);
-		uint16_t rdlength = ntohs_uint16(response.data() + p + 8);
-		p += 10;
-		if (p + rdlength > response.size()) return false;
+		uint16_t type = ntohs_uint16(response.data() + pos);
+		uint16_t rdlength = ntohs_uint16(response.data() + pos + 8);
+		pos += 10;
+		if (pos + rdlength > response.size()) break;
 
-		if ((expected_type == QType::A && type == 1) ||
-			(expected_type == QType::AAAA && type == 28))
+		if (type == 5)
+		{ // CNAME
+			size_t cname_consumed = 0;
+			std::string cname = decode_domain_name(response.data(), pos, response.size(), cname_consumed);
+			out_cname = cname;
+		}
+		else if ((expected_type == QType::A && type == 1) ||
+				 (expected_type == QType::AAAA && type == 28))
 		{
 			if ((expected_type == QType::A && rdlength == 4) ||
 				(expected_type == QType::AAAA && rdlength == 16))
 			{
 				char ip_str[INET6_ADDRSTRLEN];
 				if (expected_type == QType::A)
-					inet_ntop(AF_INET, response.data() + p, ip_str, sizeof(ip_str));
+					inet_ntop(AF_INET, response.data() + pos, ip_str, sizeof(ip_str));
 				else
-					inet_ntop(AF_INET6, response.data() + p, ip_str, sizeof(ip_str));
-				results.emplace_back(ip_str);
+					inet_ntop(AF_INET6, response.data() + pos, ip_str, sizeof(ip_str));
+				answers.emplace_back(ip_str);
 			}
 		}
-		else if (type == 2 && nscount > 0)
-		{
-			size_t ns_consumed = 0;
-			std::string ns_name = decode_domain_name(response.data(), p, response.size(), ns_consumed);
-			next_ns.push_back(ns_name);
-		}
-		else if (type == 1 && nscount == 0 && ancount == 0)
-		{
-			char ip_str[INET_ADDRSTRLEN];
-			if (rdlength == 4)
-			{
-				inet_ntop(AF_INET, response.data() + p, ip_str, sizeof(ip_str));
-				next_ns.push_back(ip_str);
-			}
-		}
-		p += rdlength;
-		return true;
-	};
-
-	for (int i = 0; i < ancount && pos < response.size(); ++i)
-	{
-		if (!parse_resource_record(pos)) break;
+		pos += rdlength;
 	}
 
-	if (!results.empty()) return results;
-
-	next_ns.clear();
+	// AUTHORITY (NS записи)
 	for (int i = 0; i < nscount && pos < response.size(); ++i)
 	{
-		if (!parse_resource_record(pos)) break;
+		size_t consumed = 0;
+		std::string name = decode_domain_name(response.data(), pos, response.size(), consumed);
+		pos += consumed;
+		if (pos + 10 > response.size()) break;
+
+		uint16_t type = ntohs_uint16(response.data() + pos);
+		uint16_t rdlength = ntohs_uint16(response.data() + pos + 8);
+		pos += 10;
+		if (pos + rdlength > response.size()) break;
+
+		if (type == 2)
+		{ // NS
+			size_t ns_consumed = 0;
+			std::string ns_name = decode_domain_name(response.data(), pos, response.size(), ns_consumed);
+			out_next_ns.push_back(ns_name);
+		}
+		pos += rdlength;
 	}
 
-	return results;
-}
-
-std::string resolve_hostname_to_ip(const std::string& name)
-{
-	struct addrinfo hints, * res;
-	std::memset(&hints, 0, sizeof(hints));
-	hints.ai_family = AF_INET;
-	hints.ai_socktype = SOCK_DGRAM;
-	if (getaddrinfo(name.c_str(), nullptr, &hints, &res) == 0)
+	// ADDITIONAL (glue)
+	for (int i = 0; i < arcount && pos < response.size(); ++i)
 	{
-		char ip_str[INET_ADDRSTRLEN];
-		inet_ntop(AF_INET, &reinterpret_cast<struct sockaddr_in*>(res->ai_addr)->sin_addr, ip_str, sizeof(ip_str));
-		std::string result(ip_str);
-		freeaddrinfo(res);
-		return result;
+		size_t consumed = 0;
+		std::string name = decode_domain_name(response.data(), pos, response.size(), consumed);
+		pos += consumed;
+		if (pos + 10 > response.size()) break;
+
+		uint16_t type = ntohs_uint16(response.data() + pos);
+		uint16_t rdlength = ntohs_uint16(response.data() + pos + 8);
+		pos += 10;
+		if (pos + rdlength > response.size()) break;
+
+		if (type == 1 && rdlength == 4)
+		{ // A glue
+			char ip_str[INET_ADDRSTRLEN];
+			inet_ntop(AF_INET, response.data() + pos, ip_str, sizeof(ip_str));
+			out_glue[name] = std::string(ip_str);
+		}
+		pos += rdlength;
 	}
-	return "";
+
+	return answers;
 }
 
-std::vector<std::string> iterative_dns_resolve(const std::string& domain, QType qtype)
+std::vector<std::string> iterative_dns_resolve(const std::string& domain, QType qtype, int depth = 0)
 {
 	std::vector<std::string> current_servers = ROOT_SERVERS;
 	std::string current_qname = domain;
@@ -336,6 +353,8 @@ std::vector<std::string> iterative_dns_resolve(const std::string& domain, QType 
 		debug_log("Querying " + server + " for " + current_qname);
 
 		std::vector<std::string> next_ns;
+		std::unordered_map<std::string, std::string> glue;
+		std::string cname_target;
 		int sockfd = create_udp_socket();
 		if (sockfd < 0) continue;
 
@@ -376,8 +395,10 @@ std::vector<std::string> iterative_dns_resolve(const std::string& domain, QType 
 				{
 					if (send_tcp_packet(tcp_sock, query))
 					{
-						if (receive_tcp_packet(tcp_sock, raw_response))
+						if (!receive_tcp_packet(tcp_sock, raw_response))
 						{
+							close(tcp_sock);
+							continue;
 						}
 					}
 				}
@@ -385,22 +406,18 @@ std::vector<std::string> iterative_dns_resolve(const std::string& domain, QType 
 			}
 		}
 
-		std::vector<std::string> answers = parse_dns_response(raw_response, qtype, next_ns);
+		auto answers = parse_dns_response(raw_response, qtype, next_ns, glue, cname_target);
+
+		if (!cname_target.empty() && answers.empty())
+		{
+			debug_log("Following CNAME: " + cname_target);
+			current_qname = cname_target;
+			continue;
+		}
 
 		if (!answers.empty())
 		{
 			return answers;
-		}
-
-		if (raw_response.size() >= 4)
-		{
-			uint16_t flags = ntohs_uint16(raw_response.data() + 2);
-			uint8_t rcode = flags & 0xF;
-			if (rcode == 3)
-			{
-				debug_log("Domain does not exist (NXDOMAIN)");
-				return {};
-			}
 		}
 
 		if (!next_ns.empty())
@@ -408,18 +425,22 @@ std::vector<std::string> iterative_dns_resolve(const std::string& domain, QType 
 			current_servers.clear();
 			for (const auto& ns: next_ns)
 			{
-				std::string ip = resolve_hostname_to_ip(ns);
-				if (ip.empty())
+				if (glue.count(ns))
 				{
-					continue;
+					debug_log("Using glue for " + ns);
+					current_servers.push_back(glue[ns]);
 				}
-				current_servers.push_back(ip);
+				else
+				{
+					if (depth >= 5) continue;
+					auto ns_ips = iterative_dns_resolve(ns, QType::A, depth + 1);
+					for (const auto& ip: ns_ips)
+					{
+						current_servers.push_back(ip);
+					}
+				}
 			}
-			if (current_servers.empty())
-			{
-				debug_log("Could not resolve NS IPs; giving up.");
-				break;
-			}
+			if (current_servers.empty()) break;
 		}
 		else
 		{
@@ -442,9 +463,7 @@ int main(int argc, char* argv[])
 	if (argc < 2)
 	{
 		std::cerr << "Usage:\n"
-				  << "  " << argv[0] << " <domain> <A|AAAA> [-d]\n"
-				  << "  " << argv[0] << " --cache-show\n"
-				  << "  " << argv[0] << " --cache-clear\n";
+				  << "  " << argv[0] << " <domain> <A|AAAA> [-d]\n";
 		return 1;
 	}
 
@@ -460,11 +479,6 @@ int main(int argc, char* argv[])
 	{
 		qtype = QType::AAAA;
 	}
-	else if (rtype_str == "DNSSEC")
-	{
-		std::cerr << "DNSSEC not supported.\n";
-		return 1;
-	}
 	else
 	{
 		std::cerr << "Unsupported record type: " << rtype_str << "\n";
@@ -472,10 +486,6 @@ int main(int argc, char* argv[])
 	}
 
 	if (argc >= 4 && std::string(argv[3]) == "-d")
-	{
-		debug_mode = true;
-	}
-	if (argc >= 5 && std::string(argv[4]) == "-d")
 	{
 		debug_mode = true;
 	}
