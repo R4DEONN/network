@@ -91,7 +91,6 @@ int main(int argc, char* argv[])
 				reinterpret_cast<struct sockaddr*>(&sender_addr), &sender_len);
 			if (n <= 0) continue;
 
-			// Проверка контрольной суммы
 			uint16_t received_checksum = received_packet.checksum;
 			received_packet.checksum = 0;
 			if (calculate_checksum(received_packet) != received_checksum)
@@ -100,7 +99,6 @@ int main(int argc, char* argv[])
 				continue;
 			}
 
-			// Обработка FIN
 			if (received_packet.flags == FLAG_FIN)
 			{
 				log("FIN packet received. Closing connection.");
@@ -111,7 +109,6 @@ int main(int argc, char* argv[])
 
 			if (received_packet.seq_num == expected_seq_num)
 			{
-				// Корректный пакет — записываем данные
 				output_file.write(received_packet.data, received_packet.data_len);
 				log("Packet " + std::to_string(expected_seq_num) + " is correct. Sending ACK.");
 
@@ -120,7 +117,6 @@ int main(int argc, char* argv[])
 			}
 			else
 			{
-				// Пакет вне очереди — отправляем дублирующий ACK
 				log("Out-of-order packet. Expected: " + std::to_string(expected_seq_num) +
 					". Resending last ACK for " + std::to_string(expected_seq_num - 1) + ".");
 				send_ack(sockfd, sender_addr, sender_len, expected_seq_num - 1);
